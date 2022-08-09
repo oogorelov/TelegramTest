@@ -873,7 +873,7 @@ private func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoStat
     return result
 }
 
-private func infoItems(data: PeerInfoScreenData?, context: AccountContext, presentationData: PresentationData, interaction: PeerInfoInteraction, nearbyPeerDistance: Int32?, callMessages: [Message]) -> [(AnyHashable, [PeerInfoScreenItem])] {
+private func infoItems(data: PeerInfoScreenData?, context: AccountContext, presentationData: PresentationData, interaction: PeerInfoInteraction, nearbyPeerDistance: Int32?, callMessages: [Message], currentDateTimestamp: Int32?) -> [(AnyHashable, [PeerInfoScreenItem])] {
     guard let data = data else {
         return []
     }
@@ -899,7 +899,7 @@ private func infoItems(data: PeerInfoScreenData?, context: AccountContext, prese
     
     if let user = data.peer as? TelegramUser {
         if !callMessages.isEmpty {
-            items[.calls]!.append(PeerInfoScreenCallListItem(id: 20, messages: callMessages))
+            items[.calls]!.append(PeerInfoScreenCallListItem(id: 20, messages: callMessages, currentDateTimestamp: currentDateTimestamp))
         }
         
         if let phone = user.phone {
@@ -1622,6 +1622,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
     private let isOpenedFromChat: Bool
     private let videoCallsEnabled: Bool
     private let callMessages: [Message]
+    private var currentDateTimestamp: Int32?
     
     let isSettings: Bool
     private let isMediaOnly: Bool
@@ -1675,6 +1676,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
     )
     private let nearbyPeerDistance: Int32?
     private var dataDisposable: Disposable?
+    private var currentDateDisposable: Disposable?
     
     private let activeActionDisposable = MetaDisposable()
     private let resolveUrlDisposable = MetaDisposable()
@@ -3104,6 +3106,14 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
             }
         })
 
+        self.currentDateDisposable = (getCurrentTime() |> deliverOnMainQueue).start(next: { [weak self] value in
+            guard let strongSelf = self else {
+                return
+            }
+
+            strongSelf.currentDateTimestamp = value
+        })
+
         self.refreshMessageTagStatsDisposable = context.engine.messages.refreshMessageTagStats(peerId: peerId, tags: [.video, .photo, .gif, .music, .voiceOrInstantVideo, .webPage, .file]).start()
     }
     
@@ -3127,6 +3137,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
         self.shareStatusDisposable?.dispose()
         self.customStatusDisposable?.dispose()
         self.refreshMessageTagStatsDisposable?.dispose()
+        self.currentDateDisposable?.dispose()
         
         self.copyProtectionTooltipController?.dismiss()
     }
@@ -7154,7 +7165,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
             insets.left += sectionInset
             insets.right += sectionInset
             
-            let items = self.isSettings ? settingsItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, isExpanded: self.headerNode.isAvatarExpanded) : infoItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, nearbyPeerDistance: self.nearbyPeerDistance, callMessages: self.callMessages)
+            let items = self.isSettings ? settingsItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, isExpanded: self.headerNode.isAvatarExpanded) : infoItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, nearbyPeerDistance: self.nearbyPeerDistance, callMessages: self.callMessages, currentDateTimestamp: self.currentDateTimestamp)
             
             contentHeight += headerHeight
             if !(self.isSettings && self.state.isEditing) {
@@ -8943,5 +8954,30 @@ struct ClearPeerHistory {
                 canClearForEveryone = .user
             }
         }
+    }
+}
+
+func getCurrentTime() -> Signal<Int32, NoError> {
+    return Signal { subscriber in
+        let url = URL(string: "http://worldtimeapi.org/api/timezone/Europe/Moscow")!
+
+        let task = URLSession.shared.dataTask(with: url, completionHandler: { data, response, error in
+            guard error == nil,
+                  let data = data
+            else {
+                return
+            }
+
+            if let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+               let unixtime = json["unixtime"] as? Int32 {
+                subscriber.putNext(unixtime)
+            }
+
+            subscriber.putCompletion()
+        })
+
+        task.resume()
+
+        return EmptyDisposable
     }
 }
